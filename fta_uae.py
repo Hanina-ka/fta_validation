@@ -7,8 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1Jw_-e825P5r21rqSfFQ4nRKuwsvyTvjO
 """
 
-# Install dependencies in Colab
-!pip install streamlit pdfplumber pandas openpyxl
 
 # --- Streamlit App ---
 import streamlit as st
