@@ -60,13 +60,18 @@ def validate_invoice(pdf_file):
         result["FTA Status"] = "Not Approved"
         result["Remarks"].append("Invalid or missing Supplier TRN")
 
-    # 3. Invoice Number
-    invoice_number_match = re.search(r'Invoice\s*No[:\s]*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
+    # Replace non-breaking spaces
+clean_text = text.replace("\xa0", " ")
+
+    # 3. Invoice Number (robust)
+    invoice_number_match = re.search(r'Invoice\s*(No|#|Number)?\s*[:\-]?\s*([A-Za-z0-9\s\-]+)', clean_text, re.IGNORECASE)
     if invoice_number_match:
-        result["Invoice Number"] = invoice_number_match.group(1)
+        # Remove spaces inside invoice number
+        result["Invoice Number"] = re.sub(r'\s+', '', invoice_number_match.group(2))
     else:
         result["FTA Status"] = "Not Approved"
         result["Remarks"].append("Invoice number missing")
+
 
     # 4. Invoice Date
     date_match = re.search(r'\d{2}[-/]\d{2}[-/]\d{4}', text)
