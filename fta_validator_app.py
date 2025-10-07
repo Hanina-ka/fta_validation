@@ -1,63 +1,124 @@
-import streamlit as st
+# -*- coding: utf-8 -*-
+"""fta_invoice_validation.py"""
+
 import pdfplumber
 import re
-from datetime import datetime
 import pandas as pd
+from datetime import datetime
 
-st.set_page_config(page_title="FTA Invoice Validator", layout="wide")
-st.title("📄 FTA Invoice Validator")
-st.write("Upload one or multiple invoice PDFs to validate against UAE FTA rules.")
+# ✅ Function: Extract key fields and validate against FTA rules
+def validate_invoice(pdf_path):
+    text = ""
 
-uploaded_files = st.file_uploader("Upload Invoice PDFs", type="pdf", accept_multiple_files=True)
+    # Extract text from all pages
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
 
-if uploaded_files:
-    results = []
+    # --- 🔍 Extract common fields ---
+    trn_match = re.search(r'100\d{10}', text)
+    invoice_number_match = re.search(r'(Invoice\s*No[:\-]?\s*\w+)', text, re.IGNORECASE)
+    invoice_date_match = re.search(r'\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b', text)
+    vat_rate_match = re.search(r'\b5\s?%|\b0\s?%', text)
+    total_amount_match = re.search(r'Total\s*(Amount)?\s*[:=]?\s*(AED\s*)?(\d+(?:\.\d{2})?)', text, re.IGNORECASE)
+    vat_amount_match = re.search(r'VAT\s*(Amount)?\s*[:=]?\s*(AED\s*)?(\d+(?:\.\d{2})?)', text, re.IGNORECASE)
+    supplier_match = re.search(r'Supplier\s*[:\-]?\s*([A-Za-z0-9\s,&]+)', text, re.IGNORECASE)
+    customer_match = re.search(r'Customer\s*[:\-]?\s*([A-Za-z0-9\s,&]+)', text, re.IGNORECASE)
 
-    for pdf_file in uploaded_files:
-        text = ""
-        with pdfplumber.open(pdf_file) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
+    # --- 🧾 Assign extracted values ---
+    trn = trn_match.group() if trn_match else None
+    invoice_number = invoice_number_match.group(0).split()[-1] if invoice_number_match else None
+    invoice_date = invoice_date_match.group() if invoice_date_match else None
+    vat_rate = vat_rate_match.group().replace(" ", "") if vat_rate_match else None
+    total_amount = float(total_amount_match.group(3)) if total_amount_match else None
+    vat_amount = float(vat_amount_match.group(3)) if vat_amount_match else None
+    supplier = supplier_match.group(1).strip() if supplier_match else None
+    customer = customer_match.group(1).strip() if customer_match else None
 
-        # --- Extract key fields ---
-        trn_match = re.search(r'\b100\d{10}\b', text)
-        vat_rate_match = re.search(r'\b(?:5|5%)\b', text)
-        vat_amount_match = re.search(r'VAT\s*[:=]?\s*(?:AED\s*)?(\d+(?:\.\d{1,2})?)', text, re.IGNORECASE)
-        total_amount_match = re.search(r'Total\s*[:=]?\s*(?:AED\s*)?(\d+(?:\.\d{1,2})?)', text, re.IGNORECASE)
-        invoice_no_match = re.search(r'(?:Invoice\s*(?:No\.?|#)\s*[:\-]?\s*)([A-Za-z0-9\-\/]+)', text, re.IGNORECASE)
+    # --- 🧮 Determine Invoice Type ---
+    invoice_type = None
+    if total_amount is not None:
+        invoice_type = "Simplified Tax Invoice" if total_amount < 10000 else "Full Tax Invoice"
 
-        # --- Improved date detection ---
-        date_patterns = [
-            r'\b\d{2}[-/]\d{2}[-/]\d{4}\b',
-            r'\b\d{4}[-/]\d{2}[-/]\d{2}\b',
-            r'\b\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}\b',
-            r'\b[A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}\b'
-        ]
-        invoice_date = None
-        for pattern in date_patterns:
-            match = re.search(pattern, text)
-            if match:
-                invoice_date = match.group()
-                break
+    # --- 🧠 FTA Validation ---
+    remarks = []
+    status = "Approved"
 
-        # --- Clean extracted fields ---
-        trn = trn_match.group() if trn_match else None
-        vat_rate = vat_rate_match.group() if vat_rate_match else None
-        vat_amount = float(vat_amount_match.group(1)) if vat_amount_match else None
-        total_amount = float(total_amount_match.group(1)) if total_amount_match else None
-        invoice_no = invoice_no_match.group(1) if invoice_no_match else None
+    # 1️⃣ Presence of “Tax Invoice” label
+    if "tax invoice" not in text.lower():
+        remarks.append("Missing 'Tax Invoice' label")
+        status = "Not Approved"
 
-        # --- Determine invoice type ---
-        if total_amount is not None:
-            invoice_type = "Tax Invoice (Full)" if total_amount >= 10000 else "Simplified Tax Invoice"
-        else:
-            invoice_type = "Unknown"
+    # 2️⃣ Supplier TRN validation
+    if not trn or not re.match(r'^100\d{10}$', trn):
+        remarks.append("Invalid or missing TRN")
+        status = "Not Approved"
 
-        # --- Validation rules ---
-        remarks = []
-        status = "Approved"
+    # 3️⃣ Invoice number presence
+    if not invoice_number:
+        remarks.append("Invoice number missing")
+        status = "Not Approved"
 
-        if not trn:
-            remarks.
+    # 4️⃣ Date validation
+    if not invoice_date:
+        remarks.append("Invoice date missing")
+        status = "Not Approved"
+    else:
+        try:
+            inv_date = datetime.strptime(invoice_date, "%d-%m-%Y")
+            if inv_date > datetime.now():
+                remarks.append("Invoice date is in the future")
+                status = "Not Approved"
+        except ValueError:
+            remarks.append("Invalid date format")
+            status = "Not Approved"
+
+    # 5️⃣ VAT calculation check
+    if total_amount and vat_amount:
+        expected_vat = round(total_amount * 0.05, 2)
+        if abs(vat_amount - expected_vat) > 0.5:
+            remarks.append(f"VAT mismatch (Expected {expected_vat}, Found {vat_amount})")
+            status = "Not Approved"
+
+    # 6️⃣ Currency compliance
+    if "aed" not in text.lower():
+        remarks.append("Amounts not in AED")
+        status = "Not Approved"
+
+    # 7️⃣ Reverse charge or discount checks
+    if "reverse charge" in text.lower():
+        remarks.append("Reverse charge mentioned")
+    if "discount" in text.lower():
+        remarks.append("Discount applied — ensure VAT recalculated")
+
+    if not remarks:
+        remarks = ["All mandatory FTA checks passed"]
+
+    return {
+        "File": pdf_path.split("/")[-1],
+        "Invoice Type": invoice_type,
+        "TRN": trn,
+        "Invoice Number": invoice_number,
+        "Invoice Date": invoice_date,
+        "Supplier": supplier,
+        "Customer": customer,
+        "VAT Rate": vat_rate,
+        "VAT Amount": vat_amount,
+        "Total Amount": total_amount,
+        "FTA Status": status,
+        "Remarks": ", ".join(remarks)
+    }
+
+# ✅ Example usage
+pdf_files = ["invoice1.pdf", "invoice2.pdf"]  # replace with your file paths
+
+results = []
+for pdf in pdf_files:
+    results.append(validate_invoice(pdf))
+
+df = pd.DataFrame(results)
+print(df)
+df.to_excel("FTA_Validated_Invoices.xlsx", index=False)
+print("\n✅ Validation complete. Results saved to 'FTA_Validated_Invoices.xlsx'")
