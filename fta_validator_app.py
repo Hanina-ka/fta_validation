@@ -1,27 +1,25 @@
+# 📄 Enhanced FTA Invoice Validator (UAE)
+# Developed by Hanina Abdul Rahman & ChatGPT
+
 import streamlit as st
 import pdfplumber
 import re
 from datetime import datetime
 import pandas as pd
+import io
 
-# -----------------------
-# PAGE SETUP
-# -----------------------
+# --- Streamlit Page Setup ---
 st.set_page_config(page_title="FTA Invoice Validator", layout="wide")
-st.title("📄 FTA Invoice Validator")
-st.write("Upload one or multiple invoice PDFs to validate against UAE FTA rules.")
+st.title("📑 UAE FTA Invoice Validator")
+st.caption("Check if uploaded invoices comply with UAE Federal Tax Authority (FTA) guidelines.")
 
-# -----------------------
-# FILE UPLOAD
-# -----------------------
-uploaded_files = st.file_uploader(
-    "Upload Invoice PDFs",
-    type="pdf",
-    accept_multiple_files=True
-)
+
+
+# --- Upload Section ---
+uploaded_files = st.file_uploader("📤 Upload Invoice PDFs", type="pdf", accept_multiple_files=True)
 
 if uploaded_files:
-    results = []  # Initialize results list
+    results = []
 
     for pdf_file in uploaded_files:
         text = ""
@@ -31,127 +29,122 @@ if uploaded_files:
                 if page_text:
                     text += page_text + "\n"
 
-        # -----------------------
-        # FTA VALIDATION
-        # -----------------------
+        # --- 1️⃣ Extract Key Fields ---
 
-        # 1️⃣ Invoice Type
-        total_amount_match = re.search(r'Total\s*[:=]?\s*AED?\s*(\d+(\.\d{2})?)', text)
-        total_amount = float(total_amount_match.group(1)) if total_amount_match else None
-        invoice_type = "Full Tax Invoice" if total_amount and total_amount >= 10000 else "Simplified Tax Invoice"
+        # TRN (must start with 100 and have 15 digits)
+        trn_match = re.search(r'\b100\d{10,12}\b', text)
+        trn = trn_match.group().strip() if trn_match else None
 
-        # 2️⃣ Mandatory Fields
-        trn_match = re.search(r'100\d{12}', text)  # Supplier TRN 15 digits
-        invoice_number_match = re.search(r'Invoice\s*No[:\s]*([A-Za-z0-9-]+)', text)
-        date_match = re.search(r'\d{2}[-/]\d{2}[-/]\d{4}', text)
-        description_match = re.search(r'Description', text, re.IGNORECASE)
-        vat_rate_match = re.search(r'\b[05]\s?%', text)
-        vat_amount_match = re.search(r'VAT\s*[:=]?\s*AED?\s*(\d+(\.\d{2})?)', text)
+        # Invoice Number (handles various patterns)
+        invoice_number_match = re.search(
+            r'(Invoice\s*(No\.?|#|Number|Ref|Reference)?[:\s-]*([A-Za-z0-9/-]+))',
+            text,
+            re.IGNORECASE
+        )
+        invoice_number = invoice_number_match.group(3).strip() if invoice_number_match else None
 
-        trn = trn_match.group() if trn_match else None
-        invoice_number = invoice_number_match.group(1) if invoice_number_match else None
-        invoice_date = date_match.group() if date_match else None
-        description_present = True if description_match else False
-        vat_rate = vat_rate_match.group() if vat_rate_match else None
-        vat_amount = float(vat_amount_match.group(1)) if vat_amount_match else None
+        # Invoice Date (varied formats)
+        date_match = re.search(
+            r'\b(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\b',
+            text
+        )
+        invoice_date = date_match.group(1) if date_match else None
+
+        # VAT Rate (5% or 0%)
+        vat_rate_match = re.search(r'\b(5|0)\s?%|\bVAT\s*Rate[:\s]*([0-9]+)%', text, re.IGNORECASE)
+        vat_rate = vat_rate_match.group(1) if vat_rate_match else "N/A"
+
+        # Total / VAT / AED
+        total_match = re.search(r'(Total\s*(Amount|AED)?[:\s]*AED?\s*([\d,]+\.\d{2}|\d+))', text, re.IGNORECASE)
+        vat_amount_match = re.search(r'(VAT\s*(Amount)?[:\s]*AED?\s*([\d,]+\.\d{2}|\d+))', text, re.IGNORECASE)
+        total_amount = float(total_match.group(3).replace(',', '')) if total_match else None
+        vat_amount = float(vat_amount_match.group(3).replace(',', '')) if vat_amount_match else None
+
+        # --- 2️⃣ FTA Validation Logic ---
 
         remarks = []
-        status = "Approved"
-
-        # Check Tax Invoice label
-        if not re.search(r'Tax Invoice', text, re.IGNORECASE):
-            remarks.append("Missing 'Tax Invoice' label")
-            status = "Not Approved"
+        status = "Approved ✅"
 
         # TRN check
-        if not trn or not re.match(r'^100\d{12}$', trn):
-            remarks.append("Invalid or missing Supplier TRN")
-            status = "Not Approved"
+        if not trn or not re.match(r'^100\d{10,12}$', trn):
+            remarks.append("❌ Invalid or missing TRN")
+            status = "Not Approved ❌"
 
-        # Invoice number check
+        # Invoice number
         if not invoice_number:
-            remarks.append("Missing Invoice Number")
-            status = "Not Approved"
+            remarks.append("❌ Missing Invoice Number")
+            status = "Not Approved ❌"
 
-        # Invoice date check
+        # Invoice date validity
         if invoice_date:
             try:
                 inv_date = datetime.strptime(invoice_date, "%d-%m-%Y")
-                if inv_date > datetime.now():
-                    remarks.append("Future date")
-                    status = "Not Approved"
             except:
-                remarks.append("Invalid date format")
-                status = "Not Approved"
+                try:
+                    inv_date = datetime.strptime(invoice_date, "%d/%m/%Y")
+                except:
+                    try:
+                        inv_date = datetime.strptime(invoice_date, "%Y-%m-%d")
+                    except:
+                        remarks.append("⚠️ Unrecognized date format")
+                        status = "Not Approved ❌"
+                        inv_date = None
+
+            if inv_date and inv_date > datetime.now():
+                remarks.append("⚠️ Future Date Detected")
+                status = "Not Approved ❌"
         else:
-            remarks.append("Missing Invoice Date")
-            status = "Not Approved"
+            remarks.append("❌ Missing Invoice Date")
+            status = "Not Approved ❌"
 
-        # Description check
-        if not description_present:
-            remarks.append("Missing Description of Goods/Services")
-            status = "Not Approved"
+        # VAT Rate
+        if vat_rate not in ["5", "5%", "0", "0%"]:
+            remarks.append("⚠️ VAT rate missing or invalid")
+            status = "Not Approved ❌"
 
-        # VAT rate check
-        if vat_rate not in ["5%", "5", "0%", "0"]:
-            remarks.append("Incorrect VAT rate")
-            status = "Not Approved"
-
-        # VAT calculation check
-        if total_amount and vat_amount is not None and vat_rate in ["5%", "5"]:
+        # VAT Calculation
+        if total_amount and vat_amount:
             expected_vat = round(total_amount * 0.05, 2)
-            if abs(vat_amount - expected_vat) > 0.5:
-                remarks.append("VAT amount mismatch")
-                status = "Not Approved"
+            if abs(vat_amount - expected_vat) > 1:
+                remarks.append("⚠️ VAT Mismatch (Expected ~5%)")
+                status = "Not Approved ❌"
+        else:
+            remarks.append("⚠️ Missing total or VAT amount")
 
-        # Currency check
-        if not re.search(r'AED', text, re.IGNORECASE):
-            remarks.append("Currency not in AED")
-            status = "Not Approved"
+        # AED currency check
+        if "AED" not in text.upper():
+            remarks.append("⚠️ Currency not in AED")
 
-        # Special cases: reverse charge / discount / tax exempt
-        if re.search(r'reverse charge', text, re.IGNORECASE) and 'The recipient is required' not in text:
-            remarks.append("Reverse charge wording missing")
-            status = "Not Approved"
+        # Label check
+        if "TAX INVOICE" not in text.upper():
+            remarks.append("⚠️ Missing 'Tax Invoice' label")
+            status = "Not Approved ❌"
 
-        if re.search(r'discount', text, re.IGNORECASE):
-            remarks.append("Discount applied — check VAT calculation")
-
-        if re.search(r'tax exempt|out of scope', text, re.IGNORECASE):
-            remarks.append("Tax exempt / out of scope wording present — verify compliance")
-
-        # Store result
+        # --- 3️⃣ Store Results ---
         results.append({
             "Invoice Name": pdf_file.name,
-            "Invoice Type": invoice_type,
-            "Supplier TRN": trn,
-            "Invoice Number": invoice_number,
-            "Invoice Date": invoice_date,
-            "Description Present": "Yes" if description_present else "No",
-            "Total Amount": total_amount,
-            "VAT Rate": vat_rate,
-            "VAT Amount": vat_amount,
+            "Invoice Number": invoice_number or "N/A",
+            "Invoice Date": invoice_date or "N/A",
+            "TRN": trn or "N/A",
+            "VAT Rate": vat_rate or "N/A",
+            "Total (AED)": total_amount or "N/A",
+            "VAT Amount (AED)": vat_amount or "N/A",
             "FTA Status": status,
-            "Remarks": ', '.join(remarks) if remarks else "All checks passed"
+            "Remarks": ', '.join(remarks) if remarks else "All checks passed ✅"
         })
 
-    # -----------------------
-    # DISPLAY RESULTS
-    # -----------------------
+    # --- 4️⃣ Display Results ---
     df = pd.DataFrame(results)
-    st.dataframe(df)
+    st.success(f"✅ Processed {len(results)} invoices successfully.")
+    st.dataframe(df, use_container_width=True)
 
-    # -----------------------
-    # DOWNLOAD EXCEL
-    # -----------------------
-    output_file = "FTA_Validation_Results.xlsx"
-    with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name="Results")
-
-    with open(output_file, "rb") as f:
-        st.download_button(
-            label="📥 Download Excel",
-            data=f,
-            file_name=output_file,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    # --- 5️⃣ Download Excel ---
+    excel_buffer = io.BytesIO()
+    df.to_excel(excel_buffer, index=False)
+    excel_buffer.seek(0)
+    st.download_button(
+        label="📥 Download FTA Validation Results",
+        data=excel_buffer,
+        file_name="FTA_Validation_Results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
