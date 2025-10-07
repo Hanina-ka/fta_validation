@@ -74,20 +74,21 @@ def validate_invoice(pdf_file):
 
 
     # 4. Invoice Date
-    date_match = re.search(r'\d{2}[-/]\d{2}[-/]\d{4}', text)
+    # Clean text
+    clean_text = text.replace("\xa0", " ").replace("\n", " ")
+    
+    # Look for keywords near dates
+    date_match = re.search(
+        r'(Invoice\s*(Date)?[:\s]*)(\d{2}[-/]\d{2}[-/]\d{4}|\d{4}[-/]\d{2}[-/]\d{2})', 
+        clean_text, 
+        re.IGNORECASE
+    )
+    
     if date_match:
-        result["Invoice Date"] = date_match.group()
-        try:
-            inv_date = datetime.strptime(result["Invoice Date"], "%d-%m-%Y")
-            if inv_date > datetime.now():
-                result["FTA Status"] = "Not Approved"
-                result["Remarks"].append("Invoice date is in the future")
-        except:
-            result["FTA Status"] = "Not Approved"
-            result["Remarks"].append("Invalid date format")
+        invoice_date = date_match.group(3)  # capture only the date part
     else:
-        result["FTA Status"] = "Not Approved"
-        result["Remarks"].append("Invoice date missing")
+        invoice_date = None
+
 
     # 5. Currency
     currency_match = re.search(r'AED', text)
