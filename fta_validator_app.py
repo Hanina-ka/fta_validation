@@ -1,61 +1,151 @@
-# pip install streamlit pdfplumber pandas openpyxl
-
 import streamlit as st
 import pdfplumber
+from pdf2image import convert_from_path
+import pytesseract
 import re
-from datetime import datetime
 import pandas as pd
-import tempfile
+import io
 
-# --- Streamlit setup ---
-st.set_page_config(page_title="FTA Invoice Validator", layout="wide")
-st.image("logo.png", width=150)  # your logo in same folder
-st.title("📄 UAE FTA Invoice Validator")
-st.write("Upload one or multiple invoice PDFs to validate against UAE FTA rules.")
+# --------------------------------------------------
+# 🖼️ PAGE CONFIGURATION
+# --------------------------------------------------
+st.set_page_config(page_title="FTA Invoice Validator", page_icon="📄", layout="wide")
 
-# --- File uploader ---
-uploaded_files = st.file_uploader(
-    "Upload Invoice PDFs",
-    type="pdf",
-    accept_multiple_files=True
+st.markdown(
+    """
+    <style>
+    .main {
+        background-color: #f8fafc;
+    }
+    .stButton>button {
+        background-color: #0078d7;
+        color: white;
+        border-radius: 5px;
+        height: 40px;
+        width: 200px;
+    }
+    .title {
+        text-align: center;
+        font-size: 30px;
+        color: #1f3c88;
+        font-weight: bold;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
-# --- Clear uploaded files ---
-if st.button("Clear Results"):
-    uploaded_files = None
-    st.experimental_rerun()
+st.markdown('<p class="title">📄 UAE FTA Invoice Validator</p>', unsafe_allow_html=True)
+st.write("Upload tax invoices (PDF) to automatically validate them against UAE FTA rules.")
 
-# --- Validate each uploaded invoice ---
+# --------------------------------------------------
+# 🔍 TEXT EXTRACTION HELPERS
+# --------------------------------------------------
+
+def extract_text_pdfplumber(pdf_path):
+    """Try extracting text and tables using pdfplumber"""
+    text_data = ""
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text(x_tolerance=2, y_tolerance=2, layout=True)
+            if page_text:
+                text_data += page_text + "\n"
+    return text_data.strip()
+
+def extract_text_ocr(pdf_path):
+    """Fallback OCR extraction for scanned invoices"""
+    text_data = ""
+    images = convert_from_path(pdf_path)
+    for img in images:
+        text_data += pytesseract.image_to_string(img)
+    return text_data.strip()
+
+def extract_text(pdf_file):
+    """Auto-select best extraction method"""
+    text = extract_text_pdfplumber(pdf_file)
+    if len(text.split()) < 30:  # If text too short, use OCR
+        text = extract_text_ocr(pdf_file)
+    return text
+
+# --------------------------------------------------
+# ✅ FTA VALIDATION LOGIC
+# --------------------------------------------------
+
+def validate_invoice(text):
+    result = {
+        "Invoice Label": "❌ Missing",
+        "Supplier TRN": "❌ Invalid",
+        "Invoice Number": "❌ Missing",
+        "Invoice Date": "❌ Missing",
+        "Currency": "❌ Not AED",
+        "VAT Check": "❌ Incorrect / Missing",
+        "Summary": "❌ Non-Compliant"
+    }
+
+    # 1️⃣ Invoice Label
+    if re.search(r'\bTax Invoice\b', text, re.IGNORECASE):
+        result["Invoice Label"] = "✅ Present"
+
+    # 2️⃣ Supplier TRN (15-digit)
+    trn = re.findall(r'\b\d{15}\b', text)
+    if trn:
+        result["Supplier TRN"] = f"✅ {trn[0]}"
+
+    # 3️⃣ Invoice Number
+    inv_num = re.findall(r'(?:Invoice\s*No\.?|#)\s*([A-Za-z0-9\-/]+)', text, re.IGNORECASE)
+    if inv_num:
+        result["Invoice Number"] = f"✅ {inv_num[0]}"
+
+    # 4️⃣ Date (YYYY-MM-DD, DD/MM/YYYY, etc.)
+    date_match = re.findall(r'(\d{2,4}[/-]\d{1,2}[/-]\d{2,4})', text)
+    if date_match:
+        result["Invoice Date"] = f"✅ {date_match[0]}"
+
+    # 5️⃣ Currency AED
+    if re.search(r'\bAED\b|\bDhs\b|\bDirham\b', text, re.IGNORECASE):
+        result["Currency"] = "✅ AED"
+
+    # 6️⃣ VAT correctness (5% presence)
+    if re.search(r'5\s?%', text):
+        result["VAT Check"] = "✅ 5% Detected"
+
+    # 7️⃣ Final Summary
+    if all("✅" in val for key, val in result.items() if key != "Summary"):
+        result["Summary"] = "✅ FTA Compliant"
+
+    return result
+
+# --------------------------------------------------
+# 📂 FILE UPLOAD
+# --------------------------------------------------
+
+uploaded_files = st.file_uploader("Upload one or more PDF invoices", type=["pdf"], accept_multiple_files=True)
+
 if uploaded_files:
     results = []
-    seen_invoice_numbers = set()  # for uniqueness check
+    for file in uploaded_files:
+        st.write(f"📁 **Processing:** {file.name}")
+        text = extract_text(file)
+        validation_result = validate_invoice(text)
+        validation_result["Filename"] = file.name
+        results.append(validation_result)
 
-    for uploaded_file in uploaded_files:
-        # Save uploaded file to a temporary file for pdfplumber
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(uploaded_file.read())
-            tmp_path = tmp.name
+    df = pd.DataFrame(results)
 
-        text = ""
-        with pdfplumber.open(tmp_path) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
+    st.subheader("🧾 Validation Results")
+    st.dataframe(df)
 
-        text_lower = text.lower()
+    # Download as Excel
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name="FTA_Validation")
+    st.download_button(
+        label="📥 Download Excel Report",
+        data=output.getvalue(),
+        file_name="FTA_Validation_Results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
-        # --- Extract fields ---
-        trn_match = re.search(r'100\d{10}', text)
-        invoice_number_match = re.search(r'Invoice\s*No[:\-]?\s*(\S+)', text, re.IGNORECASE)
-        invoice_date_match = re.search(r'\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b', text)
-        vat_rate_match = re.search(r'\b5\s?%|\b0\s?%', text)
-        total_amount_match = re.search(r'Total\s*(Amount)?\s*[:=]?\s*(AED\s*)?(\d+(?:\.\d{2})?)', text, re.IGNORECASE)
-        vat_amount_match = re.search(r'VAT\s*(Amount)?\s*[:=]?\s*(AED\s*)?(\d+(?:\.\d{2})?)', text, re.IGNORECASE)
-        supplier_match = re.search(r'Supplier\s*[:\-]?\s*([A-Za-z0-9\s,&]+)', text, re.IGNORECASE)
-        customer_match = re.search(r'Customer\s*[:\-]?\s*([A-Za-z0-9\s,&]+)', text, re.IGNORECASE)
-
-        # --- Assign values ---
-        trn = trn_match.group() if trn_match else None
-        invoice_number = invoice_number_match.group(1) if invoice_number_match else None
-        invoice_date = invoice_date_match.group() if invoice_date_match else None
+    # Clear button
+    if st.button("🗑️ Clear All"):
+        st.experimental_rerun()
