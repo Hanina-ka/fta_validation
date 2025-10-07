@@ -7,7 +7,7 @@ Original file is located at
     https://colab.research.google.com/drive/1TjlhOphQXiD_9rBZh0-e5G1BxQuT-Upt
 """
 
-pip install streamlit pdfplumber pandas openpyxl
+
 
 import streamlit as st
 import pdfplumber
