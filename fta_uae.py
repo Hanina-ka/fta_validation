@@ -52,9 +52,10 @@ def validate_invoice(pdf_file):
         result["Remarks"].append("Missing 'Tax Invoice' label")
 
     # 2. Supplier TRN
-    trn_match = re.search(r'\b100\d{10}\b', text)
+    trn_match = re.search(r'100\s*\d{3}\s*\d{3}\s*\d{3}\s*\d{3}', text.replace("\xa0", ""))
     if trn_match:
-        result["Supplier TRN"] = trn_match.group()
+        result["Supplier TRN"] = re.sub(r'\s+', '', trn_match.group())  # remove spaces
+
     else:
         result["FTA Status"] = "Not Approved"
         result["Remarks"].append("Invalid or missing Supplier TRN")
