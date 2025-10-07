@@ -1,71 +1,64 @@
 import streamlit as st
-import fitz  # PyMuPDF
 import pandas as pd
+from unstructured.partition.pdf import partition_pdf
 import re
+import tempfile
+import os
 
-st.title("📄 FTA Invoice Validator")
+# ---------- Function to extract key details ----------
+def extract_invoice_details(pdf_path):
+    elements = partition_pdf(filename=pdf_path)
+    text = "\n".join([str(el) for el in elements])
 
-# Function to extract text from PDF
-def extract_text_from_pdf(file):
-    text = ""
-    with fitz.open(stream=file.read(), filetype="pdf") as doc:
-        for page in doc:
-            text += page.get_text("text")
-    return text
-
-# Function to validate invoice fields
-def validate_invoice(text):
-    errors = []
-
-    # 1️⃣ Check invoice type
-    if "Tax Invoice" in text:
-        invoice_type = "Tax Invoice"
-    elif "Simplified Tax Invoice" in text:
-        invoice_type = "Simplified Tax Invoice"
-    else:
-        invoice_type = "Unknown"
-        errors.append("Invoice type not found")
-
-    # 2️⃣ Supplier TRN check (15 digits)
+    # --- Pattern checks ---
     trn_match = re.search(r"\b\d{15}\b", text)
-    if not trn_match:
-        errors.append("Missing or invalid Supplier TRN (must be 15 digits)")
+    invoice_no = re.search(r"(Invoice\s*Number|Inv\s*No\.?|#)\s*[:\-]?\s*([A-Za-z0-9\-]+)", text, re.IGNORECASE)
+    date_match = re.search(r"(\d{1,2}[\/\-\.\s]\d{1,2}[\/\-\.\s]\d{2,4})", text)
+    vat_match = re.search(r"VAT\s*[:\-]?\s*(\d+\.?\d*)", text, re.IGNORECASE)
+    total_match = re.search(r"Total\s*(Amount|Payable|AED)?\s*[:\-]?\s*(AED)?\s*(\d+\.?\d*)", text, re.IGNORECASE)
+    currency_match = "AED" if "AED" in text.upper() else "Other"
 
-    # 3️⃣ Currency check
-    if "AED" not in text:
-        errors.append("Currency not in AED")
+    # --- Invoice Type ---
+    invoice_type = "Tax Invoice" if "TAX INVOICE" in text.upper() else "Simplified Invoice" if "SIMPLIFIED" in text.upper() else "Unknown"
 
-    # 4️⃣ Mandatory fields
-    mandatory_keywords = ["Invoice Number", "Date", "Supplier", "Customer", "Description", "Amount"]
-    for key in mandatory_keywords:
-        if key.lower() not in text.lower():
-            errors.append(f"Missing mandatory field: {key}")
-
-    return {
+    data = {
         "Invoice Type": invoice_type,
-        "TRN": trn_match.group(0) if trn_match else None,
-        "Currency": "AED" if "AED" in text else "Other",
-        "Errors": ", ".join(errors) if errors else "No issues found ✅"
+        "Supplier TRN": trn_match.group() if trn_match else None,
+        "Invoice Number": invoice_no.group(2) if invoice_no else None,
+        "Invoice Date": date_match.group(1) if date_match else None,
+        "VAT Amount": vat_match.group(1) if vat_match else None,
+        "Total Amount": total_match.group(3) if total_match else None,
+        "Currency": currency_match
     }
 
-# File upload
-uploaded_file = st.file_uploader("Upload PDF Invoice", type=["pdf"])
+    return data
 
-if uploaded_file:
-    st.info("Reading invoice...")
-    text = extract_text_from_pdf(uploaded_file)
-    
-    # Validate
-    result = validate_invoice(text)
-    df = pd.DataFrame([result])
 
-    st.subheader("✅ Validation Result")
+# ---------- Streamlit App ----------
+st.title("📄 UAE FTA Invoice Extractor (Phase 1)")
+
+uploaded_files = st.file_uploader("Upload Invoice PDFs", accept_multiple_files=True, type=["pdf"])
+
+if uploaded_files:
+    results = []
+
+    for uploaded_file in uploaded_files:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
+
+        extracted_data = extract_invoice_details(tmp_path)
+        extracted_data["File Name"] = uploaded_file.name
+        results.append(extracted_data)
+
+        os.remove(tmp_path)
+
+    df = pd.DataFrame(results)
     st.dataframe(df)
 
-    # Download Excel
-    st.download_button(
-        label="📥 Download Validation Result (Excel)",
-        data=df.to_csv(index=False).encode('utf-8'),
-        file_name="fta_validation_result.csv",
-        mime="text/csv"
-    )
+    # Download button for Excel
+    excel_path = "invoice_extracted_results.xlsx"
+    df.to_excel(excel_path, index=False)
+    with open(excel_path, "rb") as f:
+        st.download_button("⬇️ Download Excel", f, file_name=excel_path)
+
