@@ -3,4 +3,6 @@ pandas
 pdfplumber
 openpyxl
 PyMuPDF
-pip install unstructured pdf2image pytesseract openpyxl
+unstructured 
+pdf2image 
+pytesseract 
