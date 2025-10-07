@@ -61,7 +61,7 @@ def validate_invoice(pdf_file):
         result["Remarks"].append("Invalid or missing Supplier TRN")
 
     # Replace non-breaking spaces
-clean_text = text.replace("\xa0", " ")
+    clean_text = text.replace("\xa0", " ")
 
     # 3. Invoice Number (robust)
     invoice_number_match = re.search(r'Invoice\s*(No|#|Number)?\s*[:\-]?\s*([A-Za-z0-9\s\-]+)', clean_text, re.IGNORECASE)
