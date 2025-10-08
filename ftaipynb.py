@@ -7,7 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1BXZXA2He4YrFfojfwq1sbh5-zqm7EKqC
 """
 
-pip install transformers sentence-transformers torch streamlit pdfplumber pytesseract pandas openpyxl pdf2image
 
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 
