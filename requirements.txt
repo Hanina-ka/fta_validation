@@ -6,3 +6,6 @@ PyMuPDF
 unstructured 
 pdf2image 
 pytesseract 
+transformers 
+sentence-transformers 
+torch 
